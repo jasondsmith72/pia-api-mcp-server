@@ -1,0 +1,319 @@
+#!/usr/bin/env node
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const BASE_URL = process.env.PIA_BASE_URL || "https://yourtenant.pia.ai/api";
+const API_KEY = process.env.PIA_API_KEY;
+
+if (!API_KEY) {
+  console.error("PIA_API_KEY environment variable is required");
+  process.exit(1);
+}
+
+const headers = {
+  Authorization: `api ${API_KEY}`,
+  "Content-Type": "application/json",
+  Accept: "application/json",
+};
+
+async function piaFetch(path, method = "GET", body = null, params = {}) {
+  const url = new URL(`${BASE_URL}${path}`);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+  }
+  const opts = { method, headers };
+  if (body && method !== "GET") opts.body = JSON.stringify(body);
+  const res = await fetch(url.toString(), opts);
+  const text = await res.text();
+  if (!res.ok) {
+    return { error: true, status: res.status, statusText: res.statusText, body: text };
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+const server = new McpServer({
+  name: "pia-api",
+  version: "1.0.0",
+});
+
+// ============================================================
+// CONFIGURE API - Agents
+// ============================================================
+
+server.tool("pia_list_agents", "List all PIA agents with optional pagination", {
+  top: z.number().optional().describe("Max results to return"),
+  skip: z.number().optional().describe("Results to skip"),
+}, async ({ top, skip }) => {
+  const data = await piaFetch("/config/agents", "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_get_agent", "Get detailed info for a specific PIA agent", {
+  agentId: z.number().describe("Agent ID"),
+}, async ({ agentId }) => {
+  const data = await piaFetch(`/config/agents/${agentId}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_activate_agent", "Activate a PIA agent", {
+  agentId: z.number().describe("Agent ID to activate"),
+}, async ({ agentId }) => {
+  const data = await piaFetch(`/config/agents/${agentId}/activate`, "PUT");
+  return { content: [{ type: "text", text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+});
+
+server.tool("pia_deactivate_agent", "Deactivate a PIA agent", {
+  agentId: z.number().describe("Agent ID to deactivate"),
+}, async ({ agentId }) => {
+  const data = await piaFetch(`/config/agents/${agentId}/deactivate`, "PUT");
+  return { content: [{ type: "text", text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+});
+
+server.tool("pia_uninstall_agent", "Uninstall a PIA agent", {
+  agentId: z.number().describe("Agent ID to uninstall"),
+}, async ({ agentId }) => {
+  const data = await piaFetch(`/config/agents/${agentId}/uninstall`, "PUT");
+  return { content: [{ type: "text", text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+});
+
+// ============================================================
+// CONFIGURE API - Clients
+// ============================================================
+
+server.tool("pia_list_clients", "List all PIA clients with optional pagination", {
+  top: z.number().optional().describe("Max results to return"),
+  skip: z.number().optional().describe("Results to skip"),
+}, async ({ top, skip }) => {
+  const data = await piaFetch("/config/clients", "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_get_client", "Get detailed info for a specific PIA client", {
+  clientId: z.number().describe("Client ID"),
+}, async ({ clientId }) => {
+  const data = await piaFetch(`/config/clients/${clientId}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ============================================================
+// AUTOMATE API - Discover
+// ============================================================
+
+server.tool("pia_list_smartforms", "List all PIA SmartForms", {
+  filter: z.string().optional().describe("Filter expression"),
+  automationName: z.string().optional().describe("Filter by automation name"),
+  title: z.string().optional().describe("Filter by title"),
+  description: z.string().optional().describe("Filter by description"),
+  top: z.number().optional().describe("Max results"),
+  skip: z.number().optional().describe("Results to skip"),
+}, async ({ filter, automationName, title, description, top, skip }) => {
+  const data = await piaFetch("/automate/discover/smartforms/all", "GET", null, {
+    Filter: filter, AutomationName: automationName, Title: title, Description: description, $top: top, $skip: skip,
+  });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_smartforms_by_client", "Get SmartForms for a specific PIA client", {
+  clientId: z.number().describe("PIA Client ID"),
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ clientId, top, skip }) => {
+  const data = await piaFetch(`/automate/discover/smartforms/piaclient/${clientId}`, "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_smartforms_by_psa_company", "Get SmartForms for a PSA company", {
+  companyId: z.number().describe("PSA Company ID"),
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ companyId, top, skip }) => {
+  const data = await piaFetch(`/automate/discover/smartforms/psacompany/${companyId}`, "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_list_techassist", "List all TechAssist automations", {
+  sandboxId: z.string().optional().describe("Sandbox ID filter"),
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ sandboxId, top, skip }) => {
+  const data = await piaFetch("/automate/discover/techassist/all", "GET", null, { SandboxId: sandboxId, $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_techassist_by_client", "Get TechAssist automations for a PIA client", {
+  clientId: z.number().describe("PIA Client ID"),
+  sandboxId: z.string().optional(),
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ clientId, sandboxId, top, skip }) => {
+  const data = await piaFetch(`/automate/discover/techassist/piaclient/${clientId}`, "GET", null, { SandboxId: sandboxId, $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_techassist_by_psa_company", "Get TechAssist automations for a PSA company", {
+  companyId: z.number().describe("PSA Company ID"),
+  sandboxId: z.string().optional(),
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ companyId, sandboxId, top, skip }) => {
+  const data = await piaFetch(`/automate/discover/techassist/psacompany/${companyId}`, "GET", null, { SandboxId: sandboxId, $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ============================================================
+// AUTOMATE API - Monitor
+// ============================================================
+
+server.tool("pia_execution_status", "Get execution status of a package instance", {
+  packageInstanceId: z.number().describe("Package Instance ID"),
+}, async ({ packageInstanceId }) => {
+  const data = await piaFetch(`/automate/monitor/execution/${packageInstanceId}/status`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_event_status", "Get execution status by event correlation ID", {
+  eventCorrelationId: z.string().describe("Event Correlation ID (GUID)"),
+}, async ({ eventCorrelationId }) => {
+  const data = await piaFetch(`/automate/monitor/event/${eventCorrelationId}/status`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_execution_logs", "Get activity logs for a package execution", {
+  packageInstanceId: z.number().describe("Package Instance ID"),
+}, async ({ packageInstanceId }) => {
+  const data = await piaFetch(`/automate/monitor/execution/${packageInstanceId}/activitylogs`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_event_logs", "Get activity logs by event correlation ID", {
+  eventCorrelationId: z.string().describe("Event Correlation ID (GUID)"),
+}, async ({ eventCorrelationId }) => {
+  const data = await piaFetch(`/automate/monitor/event/${eventCorrelationId}/activitylogs`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_running_executions", "List all currently running PIA automations", {}, async () => {
+  const data = await piaFetch("/automate/monitor/execution/running");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ============================================================
+// AUTOMATE API - Trigger
+// ============================================================
+
+server.tool("pia_trigger_automation", "Trigger a PIA automation package", {
+  packageId: z.string().describe("Package ID (GUID)"),
+  sandboxId: z.string().optional().describe("Sandbox ID (optional)"),
+  variableInputs: z.array(z.object({
+    key: z.string(),
+    value: z.string(),
+  })).optional().describe("Variable inputs as key-value pairs"),
+}, async ({ packageId, sandboxId, variableInputs }) => {
+  const body = variableInputs ? { variableInputs } : {};
+  const data = await piaFetch(`/automate/trigger/${packageId}`, "POST", body, { sandboxId });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_trigger_for_client", "Trigger automation with PIA client context", {
+  packageId: z.string().describe("Package ID (GUID)"),
+  clientId: z.number().describe("PIA Client ID"),
+  sandboxId: z.string().optional(),
+  variableInputs: z.array(z.object({ key: z.string(), value: z.string() })).optional(),
+}, async ({ packageId, clientId, sandboxId, variableInputs }) => {
+  const body = variableInputs ? { variableInputs } : {};
+  const data = await piaFetch(`/automate/trigger/${packageId}/piaclient/${clientId}`, "POST", body, { sandboxId });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_trigger_for_psa_company", "Trigger automation with PSA company context", {
+  packageId: z.string().describe("Package ID (GUID)"),
+  psaCompanyId: z.number().describe("PSA Company ID"),
+  sandboxId: z.string().optional(),
+  variableInputs: z.array(z.object({ key: z.string(), value: z.string() })).optional(),
+}, async ({ packageId, psaCompanyId, sandboxId, variableInputs }) => {
+  const body = variableInputs ? { variableInputs } : {};
+  const data = await piaFetch(`/automate/trigger/${packageId}/psacompany/${psaCompanyId}`, "POST", body, { sandboxId });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_trigger_with_ticket", "Trigger automation with ticket context", {
+  packageId: z.string().describe("Package ID (GUID)"),
+  ticketId: z.number().describe("Ticket ID"),
+  sandboxId: z.string().optional(),
+  variableInputs: z.array(z.object({ key: z.string(), value: z.string() })).optional(),
+}, async ({ packageId, ticketId, sandboxId, variableInputs }) => {
+  const body = variableInputs ? { variableInputs } : {};
+  const data = await piaFetch(`/automate/trigger/${packageId}/withTicket/${ticketId}`, "POST", body, { sandboxId });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ============================================================
+// BUILD API - Source Control
+// ============================================================
+
+server.tool("pia_list_repositories", "List all PIA source repositories", {
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ top, skip }) => {
+  const data = await piaFetch("/build/source/repositories", "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_get_repository", "Get a specific PIA source repository", {
+  repositoryId: z.string().describe("Repository ID"),
+}, async ({ repositoryId }) => {
+  const data = await piaFetch(`/build/source/repositories/${repositoryId}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_push_source", "Push/import source to a PIA repository", {
+  repositoryId: z.string().describe("Repository ID"),
+  sourceData: z.string().describe("JSON string of SourceImportInputModel (packages, activities, forms, branch)"),
+}, async ({ repositoryId, sourceData }) => {
+  const body = JSON.parse(sourceData);
+  const data = await piaFetch(`/build/source/push/${repositoryId}`, "POST", body);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_pull_source", "Pull/export source from a PIA repository", {
+  repositoryId: z.string().describe("Repository ID"),
+  exportFilter: z.string().describe("JSON string of SourceExportInputModel (activityNames, formNames, packageIds)"),
+}, async ({ repositoryId, exportFilter }) => {
+  const body = JSON.parse(exportFilter);
+  const data = await piaFetch(`/build/source/pull/${repositoryId}`, "POST", body);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_store_repo_config", "Store configuration for a PIA repository", {
+  repositoryId: z.string().describe("Repository ID"),
+  configData: z.string().describe("JSON string of StoreRepositoryConfigModel"),
+}, async ({ repositoryId, configData }) => {
+  const body = JSON.parse(configData);
+  const data = await piaFetch(`/build/source/repositories/${repositoryId}/config`, "POST", body);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ============================================================
+// Generic / Escape Hatch
+// ============================================================
+
+server.tool("pia_raw_request", "Make a raw PIA API request (for endpoints not covered by other tools)", {
+  path: z.string().describe("API path starting with / (e.g. /config/agents)"),
+  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).default("GET"),
+  body: z.string().optional().describe("JSON request body string"),
+  queryParams: z.string().optional().describe("JSON object of query parameters"),
+}, async ({ path, method, body, queryParams }) => {
+  const params = queryParams ? JSON.parse(queryParams) : {};
+  const bodyObj = body ? JSON.parse(body) : null;
+  const data = await piaFetch(path, method, bodyObj, params);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// Start server
+const transport = new StdioServerTransport();
+await server.connect(transport);

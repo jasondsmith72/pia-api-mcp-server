@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pia-api": {
+      "command": "node",
+      "args": ["pia-mcp-server.mjs"],
+      "env": {
+        "PIA_API_KEY": "YOUR_PIA_API_KEY_HERE",
+        "PIA_BASE_URL": "https://yourtenant.pia.ai/api"
+      }
+    }
+  }
+}
