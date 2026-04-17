@@ -2,9 +2,20 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import * as path from "node:path";
+import {
+  writeExportToFiles,
+  readImportFromFiles,
+  scanPackageRefs,
+  listLocalPackages,
+  listLocalActivities,
+  listLocalForms,
+  DEFAULT_AUTOMATIONS_FOLDER,
+} from "./sourceSync.mjs";
 
 const BASE_URL = process.env.PIA_BASE_URL || "https://yourtenant.pia.ai/api";
 const API_KEY = process.env.PIA_API_KEY;
+const WORKSPACE_ROOT = process.env.PIA_WORKSPACE_ROOT || process.cwd();
 
 if (!API_KEY) {
   console.error("PIA_API_KEY environment variable is required");
@@ -273,7 +284,7 @@ server.tool("pia_get_repository", "Get a specific PIA source repository", {
 
 server.tool("pia_push_source", "Push/import source to a PIA repository", {
   repositoryId: z.string().describe("Repository ID"),
-  sourceData: z.string().describe("JSON string of SourceImportInputModel (packages, activities, forms, branch)"),
+  sourceData: z.string().describe("JSON string of SourceImportInputModel: {packages: [], activities: [], forms: [], globalVariables: [], branch?}"),
 }, async ({ repositoryId, sourceData }) => {
   const body = JSON.parse(sourceData);
   const data = await piaFetch(`/build/source/push/${repositoryId}`, "POST", body);
@@ -282,7 +293,7 @@ server.tool("pia_push_source", "Push/import source to a PIA repository", {
 
 server.tool("pia_pull_source", "Pull/export source from a PIA repository", {
   repositoryId: z.string().describe("Repository ID"),
-  exportFilter: z.string().describe("JSON string of SourceExportInputModel (activityNames, formNames, packageIds)"),
+  exportFilter: z.string().describe("JSON string of SourceExportInputModel: {activityStaticNames: [], formStaticNames: [], packageInternalIds: []}"),
 }, async ({ repositoryId, exportFilter }) => {
   const body = JSON.parse(exportFilter);
   const data = await piaFetch(`/build/source/pull/${repositoryId}`, "POST", body);
@@ -296,6 +307,125 @@ server.tool("pia_store_repo_config", "Store configuration for a PIA repository",
   const body = JSON.parse(configData);
   const data = await piaFetch(`/build/source/repositories/${repositoryId}/config`, "POST", body);
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ============================================================
+// BUILD API - File-tree sync (Pia.Automations layout)
+// ============================================================
+//
+// These tools implement the same on-disk layout used by the Pia VS Code
+// extension so you can pull source into a git-tracked directory, edit it
+// as files, and push it back. Layout:
+//   <root>/Pia.Automations/Activities/<staticName>/{activity.ps1, *.json}
+//   <root>/Pia.Automations/Forms/<staticName>/{form_template.json, *.json}
+//   <root>/Pia.Automations/Packages/<name>_<internalId>/{package.yaml, *.json}
+// `workspaceRoot` defaults to $PIA_WORKSPACE_ROOT or the process cwd.
+
+const workspaceSchema = z.string().optional().describe(
+  "Absolute path to the workspace root (parent of Pia.Automations). Defaults to PIA_WORKSPACE_ROOT or cwd."
+);
+const automationsFolderSchema = z.string().optional().describe(
+  `Name of the automations root folder (default "${DEFAULT_AUTOMATIONS_FOLDER}")`
+);
+
+function resolveRoot(workspaceRoot) {
+  const root = workspaceRoot ?? WORKSPACE_ROOT;
+  return path.isAbsolute(root) ? root : path.resolve(root);
+}
+
+server.tool("pia_pull_to_files", "Pull source from a PIA repository and write it to the local Pia.Automations file tree (activity.ps1 + *.json + package.yaml). Same layout as the Pia VS Code extension.", {
+  repositoryId: z.string().describe("Repository ID (e.g. Sandbox_3)"),
+  activityStaticNames: z.array(z.string()).optional().describe("Activity static names to include"),
+  formStaticNames: z.array(z.string()).optional().describe("Form static names to include"),
+  packageInternalIds: z.array(z.string()).optional().describe("Package internal IDs to include"),
+  workspaceRoot: workspaceSchema,
+  automationsFolder: automationsFolderSchema,
+}, async ({ repositoryId, activityStaticNames, formStaticNames, packageInternalIds, workspaceRoot, automationsFolder }) => {
+  const filter = {
+    activityStaticNames: activityStaticNames ?? [],
+    formStaticNames: formStaticNames ?? [],
+    packageInternalIds: packageInternalIds ?? [],
+  };
+  const data = await piaFetch(`/build/source/pull/${repositoryId}`, "POST", filter);
+  if (data?.error) {
+    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  }
+  const root = resolveRoot(workspaceRoot);
+  const result = await writeExportToFiles(data, root, { automationsFolder });
+  return { content: [{ type: "text", text: JSON.stringify({ pulledFrom: repositoryId, ...result }, null, 2) }] };
+});
+
+server.tool("pia_push_from_files", "Read the local Pia.Automations file tree and push selected packages/activities/forms to a PIA repository. Set autoScanRefs=true (default) to auto-include activities/forms referenced by the chosen packages' YAML.", {
+  repositoryId: z.string().describe("Repository ID (e.g. sandbox_123)"),
+  packageInternalIds: z.array(z.string()).optional().describe("Package internal IDs to push"),
+  activityStaticNames: z.array(z.string()).optional().describe("Extra activity static names to include (in addition to auto-scan)"),
+  formStaticNames: z.array(z.string()).optional().describe("Extra form static names to include (in addition to auto-scan)"),
+  autoScanRefs: z.boolean().optional().default(true).describe("Scan package YAML and auto-include referenced activities/forms"),
+  branch: z.string().optional().describe("Optional branch name for the push"),
+  workspaceRoot: workspaceSchema,
+  automationsFolder: automationsFolderSchema,
+}, async ({ repositoryId, packageInternalIds, activityStaticNames, formStaticNames, autoScanRefs, branch, workspaceRoot, automationsFolder }) => {
+  const root = resolveRoot(workspaceRoot);
+  const pkgIds = packageInternalIds ?? [];
+  let activities = new Set(activityStaticNames ?? []);
+  let forms = new Set(formStaticNames ?? []);
+
+  if (autoScanRefs && pkgIds.length > 0) {
+    const scan = await scanPackageRefs(root, pkgIds, { automationsFolder });
+    for (const a of scan.activityStaticNames) activities.add(a);
+    for (const f of scan.formStaticNames) forms.add(f);
+  }
+
+  const importPayload = await readImportFromFiles(root, {
+    activityStaticNames: [...activities],
+    formStaticNames: [...forms],
+    packageInternalIds: pkgIds,
+  }, { automationsFolder });
+
+  if (branch) importPayload.branch = branch;
+
+  const data = await piaFetch(`/build/source/push/${repositoryId}`, "POST", importPayload);
+  const summary = {
+    pushedTo: repositoryId,
+    counts: {
+      packages: importPayload.packages.length,
+      activities: importPayload.activities.length,
+      forms: importPayload.forms.length,
+    },
+    result: data,
+  };
+  return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+});
+
+server.tool("pia_scan_package_refs", "Scan local package YAML to resolve referenced activity/form static names. Useful for previewing what pia_push_from_files will include.", {
+  packageInternalIds: z.array(z.string()).describe("Package internal IDs to scan"),
+  workspaceRoot: workspaceSchema,
+  automationsFolder: automationsFolderSchema,
+}, async ({ packageInternalIds, workspaceRoot, automationsFolder }) => {
+  const root = resolveRoot(workspaceRoot);
+  const result = await scanPackageRefs(root, packageInternalIds, { automationsFolder });
+  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+});
+
+server.tool("pia_list_local_packages", "List packages present in the local Pia.Automations/Packages directory (name, internalId, folder, deleted flag).", {
+  workspaceRoot: workspaceSchema,
+  automationsFolder: automationsFolderSchema,
+}, async ({ workspaceRoot, automationsFolder }) => {
+  const root = resolveRoot(workspaceRoot);
+  const data = await listLocalPackages(root, { automationsFolder });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_list_local_activities_forms", "List the activity and form staticName folders present locally.", {
+  workspaceRoot: workspaceSchema,
+  automationsFolder: automationsFolderSchema,
+}, async ({ workspaceRoot, automationsFolder }) => {
+  const root = resolveRoot(workspaceRoot);
+  const [activities, forms] = await Promise.all([
+    listLocalActivities(root, { automationsFolder }),
+    listLocalForms(root, { automationsFolder }),
+  ]);
+  return { content: [{ type: "text", text: JSON.stringify({ activities, forms }, null, 2) }] };
 });
 
 // ============================================================
