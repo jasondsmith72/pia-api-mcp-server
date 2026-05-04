@@ -13,10 +13,14 @@ import {
   DEFAULT_AUTOMATIONS_FOLDER,
 } from "./sourceSync.mjs";
 
-const BASE_URL = process.env.PIA_BASE_URL || "https://yourtenant.pia.ai/api";
+const BASE_URL = process.env.PIA_BASE_URL;
 const API_KEY = process.env.PIA_API_KEY;
 const WORKSPACE_ROOT = process.env.PIA_WORKSPACE_ROOT || process.cwd();
 
+if (!BASE_URL) {
+  console.error("PIA_BASE_URL environment variable is required (e.g. https://yourtenant.pia.ai/api)");
+  process.exit(1);
+}
 if (!API_KEY) {
   console.error("PIA_API_KEY environment variable is required");
   process.exit(1);
