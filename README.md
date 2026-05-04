@@ -103,7 +103,7 @@ All config is via environment variables.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `PIA_API_KEY` | **Yes** | — | Your PIA API key. Needs the `PiaSource.ReadWrite` scope for source-control tools; `Automate.*` scopes for trigger/monitor tools. |
-| `PIA_BASE_URL` | No | `https://yourtenant.pia.ai/api` | Your PIA tenant's API root. **Change this** if you're not on the MTUSA tenant. |
+| `PIA_BASE_URL` | **Yes** | — | Your PIA tenant's API root, e.g. `https://yourtenant.pia.ai/api`. The server fails fast if this is unset. |
 | `PIA_WORKSPACE_ROOT` | No | `process.cwd()` | Where the `Pia.Automations/` folder lives (or will be created). Leave unset in Claude Code — it inherits your current project dir automatically. Set it explicitly for clients like Claude Desktop that don't launch from a project directory. |
 
 Every file-sync tool also takes a `workspaceRoot` arg per-call, which overrides the env var.
@@ -347,6 +347,8 @@ This is tested against a live PIA tenant on every release.
 
 **`PIA_API_KEY environment variable is required`** — set `PIA_API_KEY` in your MCP client config's `env` block.
 
+**`PIA_BASE_URL environment variable is required`** — set `PIA_BASE_URL` in your MCP client config's `env` block, e.g. `https://yourtenant.pia.ai/api`.
+
 **Pull returns empty `{ packages: [], activities: [], forms: [] }`** — you're almost certainly using the wrong field names in `exportFilter`. The API wants `activityStaticNames`, `formStaticNames`, `packageInternalIds` — *not* `activityNames`/`formNames`/`packageIds`. The file-sync tools handle this for you; only the raw `pia_pull_source` is a gotcha.
 
 **`Could not authenticate`** — API key is bad or missing the `PiaSource.ReadWrite` scope. Check scopes under *Admin → API Keys* in your PIA tenant.
@@ -360,6 +362,10 @@ This is tested against a live PIA tenant on every release.
 ---
 
 ## Changelog
+
+### 1.2.0
+
+- **Breaking**: `PIA_BASE_URL` is now required; the server fails fast if it's not set. Previously fell back to a hardcoded default. Set `PIA_BASE_URL=https://yourtenant.pia.ai/api` in your MCP client config.
 
 ### 1.1.0
 
