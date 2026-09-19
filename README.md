@@ -19,6 +19,8 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that gives Cl
   - [Automate — Discover](#automate--discover)
   - [Automate — Monitor](#automate--monitor)
   - [Automate — Trigger](#automate--trigger)
+  - [Configure — Extensions](#configure--extensions)
+  - [Configure — Integrations](#configure--integrations)
   - [Build — Source control (raw)](#build--source-control-raw)
   - [Build — File-tree sync](#build--file-tree-sync)
   - [Escape hatch](#escape-hatch)
@@ -102,7 +104,7 @@ All config is via environment variables.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `PIA_API_KEY` | **Yes** | — | Your PIA API key. Needs the `PiaSource.ReadWrite` scope for source-control tools; `Automate.*` scopes for trigger/monitor tools. |
+| `PIA_API_KEY` | **Yes** | — | Your PIA API key. Scopes by tool group: `Agents.Read/Write`, `Clients.Read/Write`, `SmartForms.Read`, `TechAssist.Read`, `Packages.Execute` (trigger), `Packages.MonitorExecution` (monitor), `PiaSource.ReadWrite` (source control), `Extensions.Read/Write` (extensions), `Integrations.Read` (integrations). |
 | `PIA_BASE_URL` | **Yes** | — | Your PIA tenant's API root, e.g. `https://yourtenant.pia.ai/api`. The server fails fast if this is unset. |
 | `PIA_WORKSPACE_ROOT` | No | `process.cwd()` | Where the `Pia.Automations/` folder lives (or will be created). Leave unset in Claude Code — it inherits your current project dir automatically. Set it explicitly for clients like Claude Desktop that don't launch from a project directory. |
 
@@ -246,6 +248,31 @@ All `pia_trigger_*` tools accept an optional `variableInputs` array of `{key, va
 | `pia_trigger_for_psa_company` | `packageId`, `psaCompanyId`, `sandboxId?`, `variableInputs?` | Fire with a PSA company context. |
 | `pia_trigger_with_ticket` | `packageId`, `ticketId`, `sandboxId?`, `variableInputs?` | Fire with a PSA ticket context (recommended for TechAssist). |
 
+### Configure — Extensions
+
+Extension automations are packages that hook into an *extension point* of a host automation (e.g. Staff Onboarding, ticket Triage). Configuration is per client. Requires the `Extensions.Read` scope; the two write tools need `Extensions.Write`.
+
+| Tool | Inputs | What it does |
+|------|--------|--------------|
+| `pia_list_extensions` | `top?`, `skip?` | All published extension packages (`packageId`, `automationName`, `packageVersionId`). |
+| `pia_list_extendable_automations` | `top?`, `skip?` | Host automations that expose extension points, with each point's `id`, `name` and sample data `schema`. |
+| `pia_get_extension_points` | `packageId` | Extension points (`uniqueId`, `description`, `dataSchema`) for one host package. |
+| `pia_get_extension_config` | `clientId`, `packageId`, `extensionPointId?` | Extensions a client has attached to a host package. Omit `extensionPointId` to see every point. |
+| `pia_get_triage_extensions` | — | Extensions attached to ticket Triage (Before Dispatch / After Dispatch). |
+| `pia_add_extension` | `clientId`, `packageId`, `extensionPointId`, `extensionPackageId`, `executeOrder?` | Attach an extension (or change its order) on a point. **Write.** |
+| `pia_remove_extension` | `clientId`, `packageId`, `extensionPointId`, `extensionPackageId` | Detach an extension from a point. **Write.** |
+
+### Configure — Integrations
+
+Read-only view of the integrations configured in the tenant. Requires `Integrations.Read` (or `PiaSource.ReadWrite`). PIA also offers an `Integrations.Write` scope, but the current API spec has no write endpoints for it yet — use `pia_raw_request` if they appear.
+
+| Tool | Inputs | What it does |
+|------|--------|--------------|
+| `pia_list_integrations` | `top?`, `skip?` | Configured integrations with category, type and auth definition (field names only, no secrets). |
+| `pia_get_integration` | `integrationId` | One integration's detail and definition. |
+| `pia_integration_configurations` | `integrationId`, `top?`, `skip?` | Configuration profiles (`id`, `name`, `isDefault`, `postfix`). |
+| `pia_integration_client_configurations` | `integrationId`, `top?`, `skip?` | Per-client configuration (`clientId`, prefix/postfix, `serviceValues`). |
+
 ### Build — Source control (raw)
 
 Low-level passthroughs. Prefer the file-tree sync tools below unless you need to skip the filesystem.
@@ -362,6 +389,11 @@ This is tested against a live PIA tenant on every release.
 ---
 
 ## Changelog
+
+### 1.3.0
+- Extensions: `pia_list_extensions`, `pia_list_extendable_automations`, `pia_get_extension_points`, `pia_get_extension_config`, `pia_get_triage_extensions`, `pia_add_extension`, `pia_remove_extension` (scopes `Extensions.Read` / `Extensions.Write`).
+- Integrations: `pia_list_integrations`, `pia_get_integration`, `pia_integration_configurations`, `pia_integration_client_configurations` (scope `Integrations.Read`).
+- README: scope-per-tool-group table.
 
 ### 1.2.0
 

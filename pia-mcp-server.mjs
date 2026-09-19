@@ -53,7 +53,7 @@ async function piaFetch(path, method = "GET", body = null, params = {}) {
 
 const server = new McpServer({
   name: "pia-api",
-  version: "1.0.0",
+  version: "1.3.0",
 });
 
 // ============================================================
@@ -430,6 +430,115 @@ server.tool("pia_list_local_activities_forms", "List the activity and form stati
     listLocalForms(root, { automationsFolder }),
   ]);
   return { content: [{ type: "text", text: JSON.stringify({ activities, forms }, null, 2) }] };
+});
+
+// ============================================================
+// EXTENSIONS (scopes: Extensions.Read / Extensions.Write)
+// ============================================================
+//
+// Extension automations are packages that hook into "extension points" of a
+// host automation (e.g. Staff Onboarding). Configuration is per client:
+// client + host package + extension point -> ordered list of extension packages.
+
+server.tool("pia_list_extensions", "List all published extension automations (packages that can be attached to another automation's extension point). Scope: Extensions.Read", {
+  top: z.number().optional().describe("Max results"),
+  skip: z.number().optional().describe("Results to skip"),
+}, async ({ top, skip }) => {
+  const data = await piaFetch("/automate/discover/extensions/all", "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_list_extendable_automations", "List automations that expose extension points, with each point's id, name and sample data schema. Scope: Extensions.Read", {
+  top: z.number().optional().describe("Max results"),
+  skip: z.number().optional().describe("Results to skip"),
+}, async ({ top, skip }) => {
+  const data = await piaFetch("/automate/discover/with-extension-points", "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_get_extension_points", "Get the available extension points (uniqueId, description, dataSchema) for a host package. Scope: Extensions.Read", {
+  packageId: z.string().describe("Host package ID (GUID)"),
+}, async ({ packageId }) => {
+  const data = await piaFetch(`/config/extensions/${packageId}/extension-points`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_get_extension_config", "Get the extensions configured for a client on a host package. Omit extensionPointId to get every extension point on the package; supply it to get that point's extension list only. Scope: Extensions.Read", {
+  clientId: z.number().describe("PIA Client ID"),
+  packageId: z.string().describe("Host package ID (GUID)"),
+  extensionPointId: z.string().optional().describe("Extension point ID (GUID). Optional."),
+}, async ({ clientId, packageId, extensionPointId }) => {
+  const path = extensionPointId
+    ? `/config/extensions/${clientId}/${packageId}/${extensionPointId}`
+    : `/config/extensions/${clientId}/${packageId}`;
+  const data = await piaFetch(path);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_get_triage_extensions", "Get the extension configuration for ticket Triage (Before Dispatch / After Dispatch extension points). Scope: Extensions.Read", {}, async () => {
+  const data = await piaFetch("/config/extensions/triage");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_add_extension", "Attach (or re-order) an extension package on a host package's extension point for a client. Scope: Extensions.Write", {
+  clientId: z.number().describe("PIA Client ID"),
+  packageId: z.string().describe("Host package ID (GUID)"),
+  extensionPointId: z.string().describe("Extension point ID (GUID) — from pia_get_extension_points"),
+  extensionPackageId: z.string().describe("Extension package ID (GUID) — from pia_list_extensions"),
+  executeOrder: z.number().int().optional().default(1).describe("Execution order among extensions on this point (1 = first)"),
+}, async ({ clientId, packageId, extensionPointId, extensionPackageId, executeOrder }) => {
+  const data = await piaFetch(`/config/extensions/${clientId}/${packageId}/${extensionPointId}`, "POST", { extensionPackageId, executeOrder });
+  return { content: [{ type: "text", text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+});
+
+server.tool("pia_remove_extension", "Detach an extension package from a host package's extension point for a client. Scope: Extensions.Write", {
+  clientId: z.number().describe("PIA Client ID"),
+  packageId: z.string().describe("Host package ID (GUID)"),
+  extensionPointId: z.string().describe("Extension point ID (GUID)"),
+  extensionPackageId: z.string().describe("Extension package ID (GUID) to remove"),
+}, async ({ clientId, packageId, extensionPointId, extensionPackageId }) => {
+  const data = await piaFetch(`/config/extensions/${clientId}/${packageId}/${extensionPointId}/${extensionPackageId}`, "DELETE");
+  return { content: [{ type: "text", text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+});
+
+// ============================================================
+// INTEGRATIONS (scope: Integrations.Read or PiaSource.ReadWrite)
+// ============================================================
+//
+// Read-only. The Integrations.Write scope exists but the current API spec
+// exposes no write endpoints for it yet; use pia_raw_request when they appear.
+
+server.tool("pia_list_integrations", "List configured integrations (name, category, type, auth definition and field list). Scope: Integrations.Read", {
+  top: z.number().optional().describe("Max results"),
+  skip: z.number().optional().describe("Results to skip"),
+}, async ({ top, skip }) => {
+  const data = await piaFetch("/config/integrations", "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_get_integration", "Get one integration's detail including its definition (prefix, authType, fields, retry/proxy flags). Scope: Integrations.Read", {
+  integrationId: z.number().describe("Integration ID"),
+}, async ({ integrationId }) => {
+  const data = await piaFetch(`/config/integrations/${integrationId}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_integration_configurations", "List the configuration profiles for an integration (id, name, isDefault, postfix). Scope: Integrations.Read", {
+  integrationId: z.number().describe("Integration ID"),
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ integrationId, top, skip }) => {
+  const data = await piaFetch(`/config/integrations/${integrationId}/configurations`, "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("pia_integration_client_configurations", "List per-client configurations for an integration (clientId, prefix/postfix, serviceValues). Secret values are not returned. Scope: Integrations.Read", {
+  integrationId: z.number().describe("Integration ID"),
+  top: z.number().optional(),
+  skip: z.number().optional(),
+}, async ({ integrationId, top, skip }) => {
+  const data = await piaFetch(`/config/integrations/${integrationId}/clientconfigurations`, "GET", null, { $top: top, $skip: skip });
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
 // ============================================================

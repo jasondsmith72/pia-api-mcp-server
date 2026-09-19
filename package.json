@@ -1,6 +1,6 @@
 {
   "name": "pia-mcp-server",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "description": "MCP server for PIA API - agents, automations, clients, source control, and file-tree sync",
   "type": "module",
   "main": "pia-mcp-server.mjs",
